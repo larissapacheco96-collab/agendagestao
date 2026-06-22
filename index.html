@@ -26,12 +26,14 @@ var today_d = new Date(); today_d.setHours(0,0,0,0);
 var june11 = new Date(2026,5,11);
 var leilane_active = today_d < june11;
 var senior_active = today_d >= june11;
+var june22 = new Date(2026,5,22);
+var seniorName = today_d >= june22 ? "Rose" : "Sênior RTC";
 
 var USERS_ALL = [
   {key:"larissa", name:"Larissa", role:"Gestora", hcls:"g", evcls:"g-ev"},
   {key:"leilane", name:"Leilane", role:"Supervisora", hcls:"s1", evcls:"s1-ev"},
   {key:"geovana", name:"Geovana", role:"Supervisora", hcls:"s2", evcls:"s2-ev"},
-  {key:"senior_rtc", name:"Sênior RTC", role:"Supervisora", hcls:"s3", evcls:"s3-ev"}
+  {key:"senior_rtc", name:seniorName, role:"Supervisora", hcls:"s3", evcls:"s3-ev"}
 ];
 var USERS = USERS_ALL.filter(function(u){
   if(u.key==="leilane") return leilane_active;
@@ -191,6 +193,7 @@ function render(){
         if(ev.importante){var t1=document.createElement("span");t1.className="etag etag-imp";t1.textContent="⭐ Importante";tags.appendChild(t1);}
         if(ev.reuniao_cliente){var t2=document.createElement("span");t2.className="etag etag-reu";t2.textContent="🤝 C/ Cliente";tags.appendChild(t2);}
         if(ev.tipo_reuniao==="interna"){var t3=document.createElement("span");t3.className="etag etag-rei";t3.textContent="👥 Interna";tags.appendChild(t3);}
+        if(ev.reagendado_auto){var t5=document.createElement("span");t5.className="etag etag-auto";t5.textContent="↪ Reagendada";tags.appendChild(t5);}
         if(tags.children.length>0) body.appendChild(tags);
 
         var badge = document.createElement("div"); badge.className = "dbadge"; badge.textContent = "✓ Concluído";
@@ -200,10 +203,8 @@ function render(){
         var rrow = document.createElement("div"); rrow.className = "resched-row";
         [1,2,3].forEach(function(d){
           var rb = document.createElement("button"); rb.className = "abt-day"; rb.textContent = "+"+d+"d";
-          rb.setAttribute("data-id",ev.id); rb.setAttribute("data-desc",ev.descricao);
-          rb.setAttribute("data-hora",ev.horario||""); rb.setAttribute("data-user",ev.usuario);
-          rb.setAttribute("data-days",d);
-          rb.onclick = function(){reschedule(this.getAttribute("data-id"),this.getAttribute("data-desc"),this.getAttribute("data-hora"),this.getAttribute("data-user"),parseInt(this.getAttribute("data-days")));};
+          rb.setAttribute("data-id",ev.id); rb.setAttribute("data-days",d);
+          rb.onclick = function(){reschedule(this.getAttribute("data-id"),parseInt(this.getAttribute("data-days")));};
           rrow.appendChild(rb);
         });
         body.appendChild(rrow);
@@ -285,12 +286,20 @@ async function togDone(id, isDone){
 }
 
 // ── RESCHEDULE ──
-async function reschedule(id, desc, hora, user, days){
+async function reschedule(id, days){
+  var ev = allEvs.find(function(e){return e.id===id;});
+  if(!ev){toast("Demanda não encontrada.",true);return;}
   var nd = new Date(cur.getTime()+days*86400000);
-  var ndl = fmtDate(nd.toISOString().slice(0,10));
-  if(!confirm('Reagendar "'+desc+'" para +'+days+'d ('+ndl+')?')) return;
+  var ndStr = nd.toISOString().slice(0,10);
+  var ndl = fmtDate(ndStr);
+  if(!confirm('Reagendar "'+ev.descricao+'" para +'+days+'d ('+ndl+')?')) return;
   try{
-    await addDoc(collection(db,"eventos"), {usuario:user, data:nd.toISOString().slice(0,10), horario:hora||null, descricao:desc, concluido:false, criado_em:new Date().toISOString()});
+    var nev = {usuario:ev.usuario, data:ndStr, horario:ev.horario||null, descricao:ev.descricao, concluido:false, criado_em:new Date().toISOString()};
+    if(ev.observacao) nev.observacao = ev.observacao;
+    if(ev.importante) nev.importante = true;
+    if(ev.reuniao_cliente) nev.reuniao_cliente = true;
+    if(ev.tipo_reuniao) nev.tipo_reuniao = ev.tipo_reuniao;
+    await addDoc(collection(db,"eventos"), nev);
     await deleteDoc(doc(db,"eventos",id));
     toast("📅 Reagendado para "+ndl+"!");
   } catch(e){ toast("Erro: "+e.message, true); }
@@ -308,7 +317,12 @@ async function reagendarSelecionadas(days){
   for(var i=0;i<evs.length;i++){
     var ev = evs[i];
     try{
-      await addDoc(collection(db,"eventos"), {usuario:ev.usuario, data:nd.toISOString().slice(0,10), horario:ev.horario||null, descricao:ev.descricao, concluido:false, criado_em:new Date().toISOString()});
+      var nev = {usuario:ev.usuario, data:nd.toISOString().slice(0,10), horario:ev.horario||null, descricao:ev.descricao, concluido:false, criado_em:new Date().toISOString()};
+      if(ev.observacao) nev.observacao = ev.observacao;
+      if(ev.importante) nev.importante = true;
+      if(ev.reuniao_cliente) nev.reuniao_cliente = true;
+      if(ev.tipo_reuniao) nev.tipo_reuniao = ev.tipo_reuniao;
+      await addDoc(collection(db,"eventos"), nev);
       await deleteDoc(doc(db,"eventos",ev.id));
       ok++;
     } catch(e){}
@@ -544,9 +558,56 @@ document.getElementById("sbSave").onclick = async function(){
   this.disabled = false; this.textContent = "Salvar";
 };
 
+// ── REAGENDAMENTO AUTOMÁTICO (não concluídas → dia seguinte após as 20h) ──
+var ROLL_HOUR = 20;          // horário de corte (20h)
+var ROLL_LOOKBACK = 90;      // quantos dias pra trás varrer (limita leituras)
+var rolling = false;
+
+async function autoRollover(){
+  if(rolling) return;
+  rolling = true;
+  try{
+    var now = new Date();
+    var t = new Date(); t.setHours(0,0,0,0);
+    var cutoffPassed = now.getHours() >= ROLL_HOUR;
+    // Antes das 20h: joga atrasadas pra hoje. Depois das 20h: joga atrasadas + as de hoje pra amanhã.
+    var target = cutoffPassed ? new Date(t.getTime()+86400000) : t;
+    var targetStr = dk(target);
+    var floorStr = dk(new Date(t.getTime() - ROLL_LOOKBACK*86400000));
+    var q = query(collection(db,"eventos"), where("data",">=",floorStr), where("data","<",targetStr));
+    var snap = await getDocs(q);
+    var ops = []; var moved = 0;
+    snap.forEach(function(d){
+      var ev = d.data();
+      if(!ev.concluido){
+        ops.push(updateDoc(doc(db,"eventos",d.id), {data:targetStr, reagendado_auto:true}));
+        moved++;
+      }
+    });
+    if(ops.length){
+      await Promise.all(ops);
+      toast("⏰ "+moved+" demanda"+(moved!==1?"s":"")+" não concluída"+(moved!==1?"s":"")+" → "+fmtDate(targetStr));
+    }
+  } catch(e){ /* silencioso: não atrapalha o uso da agenda */ }
+  rolling = false;
+}
+
+function scheduleRollover(){
+  var now = new Date();
+  var next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), ROLL_HOUR, 0, 5, 0);
+  if(now.getTime() >= next.getTime()) next = new Date(next.getTime()+86400000);
+  setTimeout(function(){
+    autoRollover().then(function(){ load(); scheduleRollover(); });
+  }, next.getTime() - now.getTime());
+}
+
 // ── INIT ──
+document.getElementById("sbUserSenior").textContent = seniorName;
+document.getElementById("vgPersonSenior").textContent = seniorName;
+autoRollover();
 load();
 loadStandby();
+scheduleRollover();
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -594,18 +655,18 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .cols{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
 .col{background:var(--wh);border-radius:16px;box-shadow:var(--sh);overflow:hidden;border:1.5px solid var(--bo);}
 .col-hdr{padding:14px 16px 12px;}
-.col-hdr.g{background:linear-gradient(135deg,var(--pd),var(--pink),#f0a0bc);}
+.col-hdr.g{background:linear-gradient(135deg,#9c7c18,#c9a227 55%,#e3cd86);}
 .col-hdr.s1{background:linear-gradient(135deg,#1a6a8a,#2b90b0);}
-.col-hdr.s2{background:linear-gradient(135deg,#5a3d8a,#7b5ab0);}
+.col-hdr.s2{background:linear-gradient(135deg,var(--teal),var(--tm));}
 .col-hdr.s3{background:linear-gradient(135deg,var(--td),var(--teal));}
 .role{font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.7);margin-bottom:2px;}
 .pname{font-family:"Playfair Display",serif;font-size:19px;font-weight:700;color:white;}
 .ecount{font-size:12px;color:rgba(255,255,255,.75);margin-top:2px;}
 .elist{padding:10px 12px;min-height:80px;}
 .ei{display:flex;gap:7px;align-items:flex-start;padding:9px 11px;border-radius:11px;margin-bottom:7px;border-left:3px solid transparent;background:var(--bg);}
-.ei.g-ev{border-color:var(--pink);}
+.ei.g-ev{border-color:#c9a227;}
 .ei.s1-ev{border-color:#2b90b0;}
-.ei.s2-ev{border-color:#7b5ab0;}
+.ei.s2-ev{border-color:var(--tm);}
 .ei.s3-ev{border-color:var(--teal);}
 .ei.importante{background:#fffbf0;border-left-width:4px;}
 .ei.g-ev.importante,.ei.s1-ev.importante,.ei.s2-ev.importante,.ei.s3-ev.importante{border-color:var(--gold);}
@@ -615,9 +676,9 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .multi-mode .ei .sel-chk{display:block;}
 .multi-mode .chk,.multi-mode .resched-row,.multi-mode .eacts{display:none;}
 .chk{width:19px;height:19px;border-radius:50%;border:2px solid var(--bo);background:white;cursor:pointer;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;font-size:11px;color:transparent;transition:all .15s;}
-.ei.g-ev.done .chk{background:var(--pink);border-color:var(--pink);color:white;}
+.ei.g-ev.done .chk{background:#c9a227;border-color:#c9a227;color:white;}
 .ei.s1-ev.done .chk{background:#2b90b0;border-color:#2b90b0;color:white;}
-.ei.s2-ev.done .chk{background:#7b5ab0;border-color:#7b5ab0;color:white;}
+.ei.s2-ev.done .chk{background:var(--tm);border-color:var(--tm);color:white;}
 .ei.s3-ev.done .chk{background:var(--teal);border-color:var(--teal);color:white;}
 .ebody{flex:1;min-width:0;}
 .etime{font-size:11px;font-weight:600;color:var(--mu);margin-bottom:1px;}
@@ -628,6 +689,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .etag-imp{background:#fff3cc;color:#8a6000;}
 .etag-reu{background:#e8f0ff;color:#2d5be3;}
 .etag-rei{background:#e8fff0;color:#1a8a4a;}
+.etag-auto{background:#fdeede;color:#b5641a;}
 .dbadge{display:none;font-size:10px;font-weight:600;border-radius:6px;padding:1px 7px;margin-top:3px;width:fit-content;}
 .g-ev .dbadge{color:var(--pd);background:var(--pl);}
 .s1-ev .dbadge{color:#1a6a8a;background:#e8f4fa;}
@@ -807,7 +869,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
               <option value="larissa">Larissa</option>
               <option value="leilane">Leilane</option>
               <option value="geovana">Geovana</option>
-              <option value="senior_rtc">Sênior RTC</option>
+              <option value="senior_rtc" id="sbUserSenior">Sênior RTC</option>
             </select>
             <select id="sbPrio" class="sb-select" style="flex:1;margin-bottom:0">
               <option value="alta">🔴 Alta</option>
@@ -836,7 +898,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
       <button class="vg-person-btn" data-person="larissa">Larissa</button>
       <button class="vg-person-btn" data-person="leilane">Leilane</button>
       <button class="vg-person-btn" data-person="geovana">Geovana</button>
-      <button class="vg-person-btn" data-person="senior_rtc">Sênior RTC</button>
+      <button class="vg-person-btn" data-person="senior_rtc" id="vgPersonSenior">Sênior RTC</button>
       <div class="vg-period">
         <label>De</label><input type="date" id="vgDe">
         <label>Até</label><input type="date" id="vgAte">
