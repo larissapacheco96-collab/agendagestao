@@ -109,12 +109,13 @@ function load(){
     snapshot.forEach(function(docSnap){
       var d = docSnap.data(); d.id = docSnap.id; data.push(d);
     });
+    var URG_ORDER = {extrema:0, urgente:1, aguardar:2};
     data.sort(function(a,b){
-      if(a.concluido===b.concluido){
-        var ha=a.horario||"99:99"; var hb=b.horario||"99:99";
-        return ha.localeCompare(hb);
-      }
-      return a.concluido?1:-1;
+      if(a.concluido!==b.concluido) return a.concluido?1:-1;
+      var ua = URG_ORDER.hasOwnProperty(a.urgencia)?URG_ORDER[a.urgencia]:3;
+      var ub = URG_ORDER.hasOwnProperty(b.urgencia)?URG_ORDER[b.urgencia]:3;
+      if(ua!==ub) return ua-ub;
+      return (a.descricao||"").localeCompare((b.descricao||""), "pt-BR", {sensitivity:"base"});
     });
     allEvs = data;
     render();
@@ -153,6 +154,7 @@ function render(){
       '<div class="fcheck imp"><input type="checkbox" id="im-'+u.key+'" class="imp-cb"><label for="im-'+u.key+'">⭐ Importante</label></div>'+
       '<div class="fcheck reu"><input type="checkbox" id="ru-'+u.key+'" class="reu-cb"><label for="ru-'+u.key+'">🤝 Reunião com cliente</label></div>'+
       '<div class="fcheck rei"><input type="checkbox" id="ri-'+u.key+'" class="rei-cb"><label for="ri-'+u.key+'">👥 Reunião interna</label></div>'+
+      '<select id="ug-'+u.key+'" class="finp urg-select"><option value="">⚡ Urgência (marcar)...</option><option value="extrema">🔴 Extrema urgência</option><option value="urgente">🟠 Urgente</option><option value="aguardar">🟢 Pode aguardar</option></select>'+
       '<div class="facts"><button class="bsave" id="sv-'+u.key+'">Salvar</button><button class="bcancel" id="cn-'+u.key+'">Cancelar</button></div>';
 
     col.appendChild(hdr); col.appendChild(elist); col.appendChild(addBtn); col.appendChild(form);
@@ -164,7 +166,7 @@ function render(){
     } else {
       evs.forEach(function(ev){
         var item = document.createElement("div");
-        item.className = "ei "+u.evcls+(ev.concluido?" done":"")+(ev.importante?" importante":"");
+        item.className = "ei "+u.evcls+(ev.concluido?" done":"")+(ev.importante?" importante":"")+(ev.urgencia==="extrema"?" urg-extrema":"");
 
         var selChk = document.createElement("input"); selChk.type = "checkbox"; selChk.className = "sel-chk";
         selChk.setAttribute("data-id", ev.id);
@@ -190,6 +192,8 @@ function render(){
         }
 
         var tags = document.createElement("div"); tags.className = "etags";
+        var UGT = {extrema:["🔴 Extrema urgência","etag-ext"],urgente:["🟠 Urgente","etag-urg"],aguardar:["🟢 Pode aguardar","etag-agu"]};
+        if(ev.urgencia&&UGT[ev.urgencia]){var t0=document.createElement("span");t0.className="etag "+UGT[ev.urgencia][1];t0.textContent=UGT[ev.urgencia][0];tags.appendChild(t0);}
         if(ev.importante){var t1=document.createElement("span");t1.className="etag etag-imp";t1.textContent="⭐ Importante";tags.appendChild(t1);}
         if(ev.reuniao_cliente){var t2=document.createElement("span");t2.className="etag etag-reu";t2.textContent="🤝 C/ Cliente";tags.appendChild(t2);}
         if(ev.tipo_reuniao==="interna"){var t3=document.createElement("span");t3.className="etag etag-rei";t3.textContent="👥 Interna";tags.appendChild(t3);}
@@ -256,6 +260,7 @@ async function saveEv(key){
   var imp = document.getElementById("im-"+key).checked;
   var reu = document.getElementById("ru-"+key).checked;
   var rei = document.getElementById("ri-"+key).checked;
+  var urg = document.getElementById("ug-"+key).value||null;
   var btn = document.getElementById("sv-"+key);
   btn.disabled = true; btn.textContent = "Salvando...";
   try{
@@ -264,6 +269,7 @@ async function saveEv(key){
     if(imp) data.importante = true;
     if(reu) data.reuniao_cliente = true;
     if(rei) data.tipo_reuniao = "interna";
+    if(urg) data.urgencia = urg;
     await addDoc(collection(db,"eventos"), data);
     toast("✓ Demanda adicionada!");
     document.getElementById("tx-"+key).value = "";
@@ -272,6 +278,7 @@ async function saveEv(key){
     document.getElementById("im-"+key).checked = false;
     document.getElementById("ru-"+key).checked = false;
     document.getElementById("ri-"+key).checked = false;
+    document.getElementById("ug-"+key).value = "";
     document.getElementById("af-"+key).classList.remove("on");
   } catch(e){ toast("Erro: "+e.message, true); }
   btn.disabled = false; btn.textContent = "Salvar";
@@ -299,6 +306,7 @@ async function reschedule(id, days){
     if(ev.importante) nev.importante = true;
     if(ev.reuniao_cliente) nev.reuniao_cliente = true;
     if(ev.tipo_reuniao) nev.tipo_reuniao = ev.tipo_reuniao;
+    if(ev.urgencia) nev.urgencia = ev.urgencia;
     await addDoc(collection(db,"eventos"), nev);
     await deleteDoc(doc(db,"eventos",id));
     toast("📅 Reagendado para "+ndl+"!");
@@ -322,6 +330,7 @@ async function reagendarSelecionadas(days){
       if(ev.importante) nev.importante = true;
       if(ev.reuniao_cliente) nev.reuniao_cliente = true;
       if(ev.tipo_reuniao) nev.tipo_reuniao = ev.tipo_reuniao;
+      if(ev.urgencia) nev.urgencia = ev.urgencia;
       await addDoc(collection(db,"eventos"), nev);
       await deleteDoc(doc(db,"eventos",ev.id));
       ok++;
@@ -351,6 +360,7 @@ function openEdit(id){
   document.getElementById("editImp").checked = ev.importante===true;
   document.getElementById("editReu").checked = ev.reuniao_cliente===true;
   document.getElementById("editRei").checked = ev.tipo_reuniao==="interna";
+  document.getElementById("editUrg").value = ev.urgencia||"";
   document.getElementById("editModal").style.display = "flex";
 }
 
@@ -362,9 +372,10 @@ window.saveEdit = async function(){
   var imp = document.getElementById("editImp").checked;
   var reu = document.getElementById("editReu").checked;
   var rei = document.getElementById("editRei").checked;
+  var urg = document.getElementById("editUrg").value||null;
   if(!desc){toast("Descrição obrigatória.",true);return;}
   try{
-    await updateDoc(doc(db,"eventos",id), {horario:hora, descricao:desc, observacao:obs||null, importante:imp, reuniao_cliente:reu, tipo_reuniao:rei?"interna":null});
+    await updateDoc(doc(db,"eventos",id), {horario:hora, descricao:desc, observacao:obs||null, importante:imp, reuniao_cliente:reu, tipo_reuniao:rei?"interna":null, urgencia:urg});
     toast("✏️ Demanda atualizada!");
     document.getElementById("editModal").style.display = "none";
   } catch(e){ toast("Erro: "+e.message, true); }
@@ -464,6 +475,8 @@ function renderVisao(){
     left.innerHTML = '<div class="vg-item-name">'+esc(uname)+'</div><div class="vg-item-desc">'+esc(ev.descricao)+'</div>';
     if(ev.observacao){var obs=document.createElement("div");obs.className="vg-item-obs";obs.textContent=ev.observacao;left.appendChild(obs);}
     var tags = document.createElement("div"); tags.className = "vg-item-tags";
+    var UGT2 = {extrema:["🔴","etag-ext"],urgente:["🟠","etag-urg"],aguardar:["🟢","etag-agu"]};
+    if(ev.urgencia&&UGT2[ev.urgencia]){var t0=document.createElement("span");t0.className="etag "+UGT2[ev.urgencia][1];t0.textContent=UGT2[ev.urgencia][0];tags.appendChild(t0);}
     if(ev.importante){var t1=document.createElement("span");t1.className="etag etag-imp";t1.textContent="⭐";tags.appendChild(t1);}
     if(ev.reuniao_cliente){var t2=document.createElement("span");t2.className="etag etag-reu";t2.textContent="🤝";tags.appendChild(t2);}
     if(ev.tipo_reuniao==="interna"){var t3=document.createElement("span");t3.className="etag etag-rei";t3.textContent="👥";tags.appendChild(t3);}
@@ -690,6 +703,11 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .etag-reu{background:#e8f0ff;color:#2d5be3;}
 .etag-rei{background:#e8fff0;color:#1a8a4a;}
 .etag-auto{background:#fdeede;color:#b5641a;}
+.etag-ext{background:#fde8e8;color:#c0392b;font-weight:700;}
+.etag-urg{background:#fff3e0;color:#b5641a;font-weight:700;}
+.etag-agu{background:#e8fff0;color:#1a7a4a;font-weight:700;}
+.ei.urg-extrema{background:#fff5f4;}
+.urg-select{background:white;margin-top:2px;}
 .dbadge{display:none;font-size:10px;font-weight:600;border-radius:6px;padding:1px 7px;margin-top:3px;width:fit-content;}
 .g-ev .dbadge{color:var(--pd);background:var(--pl);}
 .s1-ev .dbadge{color:#1a6a8a;background:#e8f4fa;}
@@ -926,6 +944,12 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
       <input type="text" id="editDesc" placeholder="Descrição..." style="flex:1;padding:7px 10px;border-radius:8px;border:1.5px solid var(--bo);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;">
     </div>
     <textarea id="editObs" placeholder="Observação (opcional)..." style="width:100%;padding:7px 10px;border-radius:8px;border:1.5px solid var(--bo);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;resize:vertical;min-height:55px;margin-bottom:8px;"></textarea>
+    <select id="editUrg" style="width:100%;padding:7px 10px;border-radius:8px;border:1.5px solid var(--bo);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;margin-bottom:8px;background:white;">
+      <option value="">⚡ Urgência (marcar)...</option>
+      <option value="extrema">🔴 Extrema urgência</option>
+      <option value="urgente">🟠 Urgente</option>
+      <option value="aguardar">🟢 Pode aguardar</option>
+    </select>
     <div class="fcheck imp" style="margin-bottom:6px;"><input type="checkbox" id="editImp" class="imp-cb"><label for="editImp">⭐ Importante</label></div>
     <div class="fcheck reu" style="margin-bottom:6px;"><input type="checkbox" id="editReu" class="reu-cb"><label for="editReu">🤝 Reunião com cliente</label></div>
     <div class="fcheck rei" style="margin-bottom:12px;"><input type="checkbox" id="editRei" class="rei-cb"><label for="editRei">👥 Reunião interna</label></div>
