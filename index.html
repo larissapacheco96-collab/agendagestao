@@ -33,13 +33,33 @@ var USERS_ALL = [
   {key:"larissa", name:"Larissa", role:"Gestora", hcls:"g", evcls:"g-ev"},
   {key:"leilane", name:"Leilane", role:"Supervisora", hcls:"s1", evcls:"s1-ev"},
   {key:"geovana", name:"Geovana", role:"Supervisora", hcls:"s2", evcls:"s2-ev"},
-  {key:"senior_rtc", name:seniorName, role:"Supervisora", hcls:"s3", evcls:"s3-ev"}
+  {key:"senior_rtc", name:seniorName, role:"Supervisora", hcls:"s3", evcls:"s3-ev"},
+  {key:"jessica", name:"Jessica", role:"Equipe", hcls:"s4", evcls:"s4-ev"}
 ];
 var USERS = USERS_ALL.filter(function(u){
   if(u.key==="leilane") return leilane_active;
   if(u.key==="senior_rtc") return senior_active;
+  if(u.key==="jessica") return false;
   return true;
 });
+var JESSICA = USERS_ALL.find(function(u){return u.key==="jessica";});
+var RESTRITO = new URLSearchParams(location.search).get("u")==="jessica";
+var agendaMode = RESTRITO ? "jessica" : "equipe";
+function activeUsers(){ return agendaMode==="jessica" ? [JESSICA] : USERS; }
+function applyMode(){
+  var sb = document.querySelector(".standby-panel");
+  var wrap = document.querySelector(".agenda-wrap");
+  var cols = document.getElementById("cols");
+  if(agendaMode==="jessica"){
+    if(sb) sb.style.display = "none";
+    if(wrap) wrap.style.gridTemplateColumns = "1fr";
+    if(cols){ cols.style.gridTemplateColumns = "minmax(0,560px)"; cols.style.justifyContent = "center"; }
+  } else {
+    if(sb) sb.style.display = "";
+    if(wrap) wrap.style.gridTemplateColumns = "";
+    if(cols){ cols.style.gridTemplateColumns = ""; cols.style.justifyContent = ""; }
+  }
+}
 
 var MONTHS = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
 var DAYS = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
@@ -80,8 +100,16 @@ document.querySelector(".tabs").addEventListener("click", function(e){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.remove("on");});
   document.querySelectorAll(".view").forEach(function(v){v.classList.remove("on");});
   btn.classList.add("on");
-  document.getElementById("view-"+btn.dataset.tab).classList.add("on");
-  if(btn.dataset.tab==="visao") initVisao();
+  var tab = btn.dataset.tab;
+  if(tab==="jessica"){
+    agendaMode = "jessica";
+    document.getElementById("view-agenda").classList.add("on");
+    applyMode(); render();
+    return;
+  }
+  if(tab==="agenda"){ agendaMode = "equipe"; applyMode(); render(); }
+  document.getElementById("view-"+tab).classList.add("on");
+  if(tab==="visao") initVisao();
 });
 
 // VG FILTERS
@@ -126,7 +154,7 @@ function load(){
 
 function renderLoading(){
   var a = document.getElementById("cols"); a.innerHTML = "";
-  USERS.forEach(function(u){
+  activeUsers().forEach(function(u){
     var c = document.createElement("div"); c.className = "col";
     c.innerHTML = '<div class="col-hdr '+u.hcls+'"><div class="role">'+u.role+'</div><div class="pname">'+u.name+'</div><div class="ecount">Carregando...</div></div><div class="elist"><div class="spin-wrap"><span class="spinner"></span>Buscando...</div></div>';
     a.appendChild(c);
@@ -136,7 +164,7 @@ function renderLoading(){
 function render(){
   updHeader();
   var a = document.getElementById("cols"); a.innerHTML = "";
-  USERS.forEach(function(u){
+  activeUsers().forEach(function(u){
     var evs = allEvs.filter(function(e){return e.usuario===u.key;});
     var done = evs.filter(function(e){return e.concluido;}).length;
     var imp = evs.filter(function(e){return e.importante;}).length;
@@ -236,7 +264,8 @@ function render(){
   });
 
   // Reunion banner
-  var reuns = allEvs.filter(function(e){return e.reuniao_cliente===true||e.tipo_reuniao==="interna";});
+  var vkeys = activeUsers().map(function(u){return u.key;});
+  var reuns = allEvs.filter(function(e){return vkeys.indexOf(e.usuario)>=0&&(e.reuniao_cliente===true||e.tipo_reuniao==="interna");});
   var banner = document.getElementById("rbanner");
   if(reuns.length>0){
     banner.classList.add("on");
@@ -617,9 +646,16 @@ function scheduleRollover(){
 // ── INIT ──
 document.getElementById("sbUserSenior").textContent = seniorName;
 document.getElementById("vgPersonSenior").textContent = seniorName;
+if(RESTRITO){
+  document.querySelectorAll('[data-tab="agenda"],[data-tab="visao"]').forEach(function(b){b.style.display="none";});
+  document.querySelectorAll(".tab").forEach(function(b){b.classList.remove("on");});
+  var jt = document.getElementById("tabJessica");
+  if(jt) jt.classList.add("on");
+  applyMode();
+}
 autoRollover();
 load();
-loadStandby();
+if(!RESTRITO) loadStandby();
 scheduleRollover();
 </script>
 <style>
@@ -672,6 +708,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .col-hdr.s1{background:linear-gradient(135deg,#1a6a8a,#2b90b0);}
 .col-hdr.s2{background:linear-gradient(135deg,var(--teal),var(--tm));}
 .col-hdr.s3{background:linear-gradient(135deg,var(--td),var(--teal));}
+.col-hdr.s4{background:linear-gradient(135deg,#5b21b6,#8b5cf6);}
 .role{font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.7);margin-bottom:2px;}
 .pname{font-family:"Playfair Display",serif;font-size:19px;font-weight:700;color:white;}
 .ecount{font-size:12px;color:rgba(255,255,255,.75);margin-top:2px;}
@@ -681,8 +718,9 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .ei.s1-ev{border-color:#2b90b0;}
 .ei.s2-ev{border-color:var(--tm);}
 .ei.s3-ev{border-color:var(--teal);}
+.ei.s4-ev{border-color:#8b5cf6;}
 .ei.importante{background:#fffbf0;border-left-width:4px;}
-.ei.g-ev.importante,.ei.s1-ev.importante,.ei.s2-ev.importante,.ei.s3-ev.importante{border-color:var(--gold);}
+.ei.g-ev.importante,.ei.s1-ev.importante,.ei.s2-ev.importante,.ei.s3-ev.importante,.ei.s4-ev.importante{border-color:var(--gold);}
 .ei.done .etxt{text-decoration:line-through;color:var(--mu);}
 .ei.selected{outline:2px solid var(--teal);outline-offset:2px;background:var(--tl)!important;}
 .sel-chk{display:none;width:15px;height:15px;border-radius:4px;cursor:pointer;flex-shrink:0;margin-top:3px;accent-color:var(--teal);}
@@ -693,6 +731,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .ei.s1-ev.done .chk{background:#2b90b0;border-color:#2b90b0;color:white;}
 .ei.s2-ev.done .chk{background:var(--tm);border-color:var(--tm);color:white;}
 .ei.s3-ev.done .chk{background:var(--teal);border-color:var(--teal);color:white;}
+.ei.s4-ev.done .chk{background:#8b5cf6;border-color:#8b5cf6;color:white;}
 .ebody{flex:1;min-width:0;}
 .etime{font-size:11px;font-weight:600;color:var(--mu);margin-bottom:1px;}
 .etxt{font-size:13px;font-weight:500;line-height:1.4;}
@@ -713,6 +752,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 .s1-ev .dbadge{color:#1a6a8a;background:#e8f4fa;}
 .s2-ev .dbadge{color:#5a3d8a;background:#f0eafa;}
 .s3-ev .dbadge{color:var(--td);background:var(--tl);}
+.s4-ev .dbadge{color:#5b21b6;background:#f3eefe;}
 .ei.done .dbadge{display:block;}
 .resched-row{display:flex;gap:3px;margin-top:4px;}
 .abt-day{background:var(--tl);border:1.5px solid var(--teal);cursor:pointer;font-size:10px;padding:2px 6px;border-radius:6px;color:var(--td);font-weight:600;transition:all .15s;}
@@ -850,6 +890,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
 <div class="tabs">
   <button class="tab on" data-tab="agenda">📅 Agenda do Dia</button>
   <button class="tab" data-tab="visao">📊 Visão Geral</button>
+  <button class="tab" data-tab="jessica" id="tabJessica">👤 Jessica</button>
 </div>
 <div class="main">
   <div class="view on" id="view-agenda">
@@ -916,6 +957,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);min-height:100vh;colo
       <button class="vg-person-btn" data-person="larissa">Larissa</button>
       <button class="vg-person-btn" data-person="leilane">Leilane</button>
       <button class="vg-person-btn" data-person="geovana">Geovana</button>
+      <button class="vg-person-btn" data-person="jessica">Jessica</button>
       <button class="vg-person-btn" data-person="senior_rtc" id="vgPersonSenior">Sênior RTC</button>
       <div class="vg-period">
         <label>De</label><input type="date" id="vgDe">
